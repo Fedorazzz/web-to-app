@@ -35,6 +35,7 @@ class AiConfigManager(private val context: Context) {
     companion object {
         private const val TAG = "AiConfigManager"
         private val KEY_API_KEYS = stringPreferencesKey("api_keys")
+        private val KEY_API_KEYS_PLAIN = stringPreferencesKey("api_keys_plain")
         private val KEY_SAVED_MODELS = stringPreferencesKey("saved_models")
         private val KEY_DEFAULT_MODEL = stringPreferencesKey("default_model")
         
@@ -61,7 +62,11 @@ class AiConfigManager(private val context: Context) {
     // API Keys Flow
     val apiKeysFlow: Flow<List<ApiKeyConfig>> = context.aiConfigDataStore.data.map { prefs ->
         val stored = prefs[KEY_API_KEYS] ?: "[]"
-        val json = decodeSensitiveJson(stored) ?: "[]"
+        val plainBackup = prefs[KEY_API_KEYS_PLAIN]
+        val json = decodeSensitiveJson(stored) ?: plainBackup ?: "[]"
+        if (json == "[]" && stored != "[]") {
+            AppLogger.w(TAG, "Decryption returned empty, stored preview: '${stored.take(30)}...'")
+        }
         try {
             val result: List<ApiKeyConfig> = gson.fromJson(json, apiKeyListType)
             result ?: emptyList()
@@ -97,7 +102,12 @@ class AiConfigManager(private val context: Context) {
                 val current = getApiKeys(prefs)
                 val updated = current + config
                 val jsonStr = gson.toJson(updated)
-                prefs[KEY_API_KEYS] = encodeSensitiveJson(jsonStr)
+                val encrypted = encodeSensitiveJson(jsonStr)
+                prefs[KEY_API_KEYS] = encrypted
+                // Save plain JSON backup in case decryption fails later
+                if (encrypted.startsWith(ENCRYPTED_PREFIX)) {
+                    prefs[KEY_API_KEYS_PLAIN] = jsonStr
+                }
                 AppLogger.d(TAG, "API key added: ${config.provider.name}, total: ${updated.size}")
             }
             true
@@ -115,7 +125,12 @@ class AiConfigManager(private val context: Context) {
             context.aiConfigDataStore.edit { prefs ->
                 val current = getApiKeys(prefs)
                 val updated = current.map { if (it.id == config.id) config else it }
-                prefs[KEY_API_KEYS] = encodeSensitiveJson(gson.toJson(updated))
+                val jsonStr = gson.toJson(updated)
+                val encrypted = encodeSensitiveJson(jsonStr)
+                prefs[KEY_API_KEYS] = encrypted
+                if (encrypted.startsWith(ENCRYPTED_PREFIX)) {
+                    prefs[KEY_API_KEYS_PLAIN] = jsonStr
+                }
                 AppLogger.d(TAG, "API key updated: ${config.provider.name}")
             }
             true
@@ -133,7 +148,12 @@ class AiConfigManager(private val context: Context) {
             context.aiConfigDataStore.edit { prefs ->
                 val current = getApiKeys(prefs)
                 val updated = current.filter { it.id != id }
-                prefs[KEY_API_KEYS] = encodeSensitiveJson(gson.toJson(updated))
+                val jsonStr = gson.toJson(updated)
+                val encrypted = encodeSensitiveJson(jsonStr)
+                prefs[KEY_API_KEYS] = encrypted
+                if (encrypted.startsWith(ENCRYPTED_PREFIX)) {
+                    prefs[KEY_API_KEYS_PLAIN] = jsonStr
+                }
                 AppLogger.d(TAG, "API key deleted, remaining: ${updated.size}")
             }
             true
@@ -256,10 +276,11 @@ class AiConfigManager(private val context: Context) {
         return getSavedModels(prefs).find { it.id == id }
     }
     
-    // 辅助方法
+    // Helper method
     private fun getApiKeys(prefs: Preferences): List<ApiKeyConfig> {
         val stored = prefs[KEY_API_KEYS] ?: return emptyList()
-        val json = decodeSensitiveJson(stored)
+        val plainBackup = prefs[KEY_API_KEYS_PLAIN]
+        val json = decodeSensitiveJson(stored) ?: plainBackup
         if (json == null) {
             AppLogger.e(TAG, "Failed to decode API keys, data may be corrupted")
             return emptyList()
@@ -301,12 +322,15 @@ class AiConfigManager(private val context: Context) {
             decrypt(payload)
         } catch (e: Exception) {
             AppLogger.e(TAG, "Decryption failed, attempting plain JSON fallback", e)
-            // 如果解密失败，尝试当作纯 JSON 解析（防止加密密钥失效导致数据丢失）
+            // Fallback: if data was saved without encryption (plain JSON), return as-is.
+            // The prefix may remain from old logic after encryption failure.
             try {
-                gson.fromJson<List<*>>(payload, List::class.java)
-                // 如果能解析为 JSON，说明是未加密的
+                // Check if payload is valid JSON
+                gson.fromJson<List<ApiKeyConfig>>(payload, apiKeyListType)
+                AppLogger.w(TAG, "Using plain JSON fallback for API keys")
                 payload
-            } catch (_: Exception) {
+            } catch (jsonEx: Exception) {
+                AppLogger.e(TAG, "Plain JSON fallback also failed, data may be lost", jsonEx)
                 null
             }
         }
