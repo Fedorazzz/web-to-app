@@ -22,10 +22,22 @@ android {
 
     signingConfigs {
         create("shiaho") {
-            storeFile = file(localProperties.getProperty("signing.storeFile", ""))
-            storePassword = localProperties.getProperty("signing.storePassword", "")
-            keyAlias = localProperties.getProperty("signing.keyAlias", "")
-            keyPassword = localProperties.getProperty("signing.keyPassword", "")
+            val storeFilePath = localProperties.getProperty("signing.storeFile", "")
+            if (storeFilePath.isNotEmpty()) {
+                storeFile = file(storeFilePath)
+            }
+            val storePassword = localProperties.getProperty("signing.storePassword", "")
+            if (storePassword.isNotEmpty()) {
+                this.storePassword = storePassword
+            }
+            val keyAliasVal = localProperties.getProperty("signing.keyAlias", "")
+            if (keyAliasVal.isNotEmpty()) {
+                keyAlias = keyAliasVal
+            }
+            val keyPasswordVal = localProperties.getProperty("signing.keyPassword", "")
+            if (keyPasswordVal.isNotEmpty()) {
+                this.keyPassword = keyPasswordVal
+            }
         }
     }
     namespace = "com.webtoapp"
